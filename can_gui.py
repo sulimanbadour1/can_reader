@@ -15,6 +15,7 @@ import can
 from collections import defaultdict, deque
 from can_reader import CANReader
 from can_decoder import CANDecoder, SignalDefinition
+from can_ids import CAN_IDS, CAN_ID_NAMES, EXAMPLE_DECODERS, DEFAULT_DECODERS, get_can_id_hex
 
 
 class CANAnalyzerGUI:
@@ -47,6 +48,9 @@ class CANAnalyzerGUI:
         
         self._setup_ui()
         
+        # Load default decoders automatically
+        self._load_default_decoders()
+        
     def _setup_ui(self):
         """Build the GUI"""
         # Split window into left (controls) and right (plots/messages)
@@ -72,16 +76,16 @@ class CANAnalyzerGUI:
         
         # Interface dropdown
         ttk.Label(conn_frame, text="Interface:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.interface_var = tk.StringVar(value="socketcan")
+        self.interface_var = tk.StringVar(value="slcan")
         interface_combo = ttk.Combobox(conn_frame, textvariable=self.interface_var,
-                                       values=["socketcan", "slcan", "usb2can", "pcan", 
+                                       values=["slcan", "socketcan", "usb2can", "pcan", 
                                               "ixxat", "vector", "virtual"],
                                        state="readonly", width=15)
         interface_combo.grid(row=0, column=1, sticky=tk.W, pady=2, padx=5)
         
         # Channel/device name
         ttk.Label(conn_frame, text="Channel:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.channel_var = tk.StringVar(value="can0")
+        self.channel_var = tk.StringVar(value="COM3")
         channel_entry = ttk.Entry(conn_frame, textvariable=self.channel_var, width=18)
         channel_entry.grid(row=1, column=1, sticky=tk.W, pady=2, padx=5)
         
@@ -107,11 +111,16 @@ class CANAnalyzerGUI:
         decoder_frame = ttk.LabelFrame(parent, text="Signal Decoder", padding=10)
         decoder_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # CAN ID (hex)
-        ttk.Label(decoder_frame, text="CAN ID (hex):").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.decode_can_id_var = tk.StringVar(value="0x123")
-        decode_id_entry = ttk.Entry(decoder_frame, textvariable=self.decode_can_id_var, width=12)
-        decode_id_entry.grid(row=0, column=1, sticky=tk.W, pady=2, padx=5)
+        # CAN ID (hex) - dropdown with predefined IDs
+        ttk.Label(decoder_frame, text="CAN ID:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.decode_can_id_var = tk.StringVar(value="")
+        decode_id_combo = ttk.Combobox(decoder_frame, textvariable=self.decode_can_id_var,
+                                      values=[f"{name} ({get_can_id_hex(cid)})" for name, cid in CAN_IDS.items()] + 
+                                             [get_can_id_hex(cid) for cid in CAN_IDS.values()],
+                                      width=20)
+        decode_id_combo.grid(row=0, column=1, sticky=tk.W, pady=2, padx=5)
+        decode_id_combo.bind('<<ComboboxSelected>>', self._on_can_id_selected)
+        self.decode_id_combo = decode_id_combo
         
         # Signal name (voltage, temperature, etc.)
         ttk.Label(decoder_frame, text="Signal Name:").grid(row=1, column=0, sticky=tk.W, pady=2)
@@ -167,6 +176,8 @@ class CANAnalyzerGUI:
                   command=lambda: self._apply_preset("voltage")).pack(side=tk.LEFT, padx=2)
         ttk.Button(preset_frame, text="Temp (16-bit)", 
                   command=lambda: self._apply_preset("temperature")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Load Predefined", 
+                  command=self._load_predefined_decoders).pack(side=tk.LEFT, padx=2)
         
         # List of active decoders
         ttk.Label(decoder_frame, text="Active Decoders:").grid(row=9, column=0, 
@@ -255,7 +266,9 @@ class CANAnalyzerGUI:
         ttk.Label(plot_select_frame, text="Plot Signal:").pack(side=tk.LEFT, padx=5)
         self.plot_can_id_var = tk.StringVar(value="")
         plot_id_combo = ttk.Combobox(plot_select_frame, textvariable=self.plot_can_id_var,
-                                     width=12, state="readonly")
+                                     values=[f"{name} ({get_can_id_hex(cid)})" for name, cid in CAN_IDS.items()] +
+                                            [get_can_id_hex(cid) for cid in CAN_IDS.values()],
+                                     width=20, state="readonly")
         plot_id_combo.pack(side=tk.LEFT, padx=5)
         plot_id_combo.bind('<<ComboboxSelected>>', lambda e: self._update_plot_selection())
         
@@ -272,6 +285,38 @@ class CANAnalyzerGUI:
         self.plot_id_combo = plot_id_combo
         self.plot_signal_combo = plot_signal_combo
         
+    def _load_default_decoders(self):
+        """Load the three default decoders automatically on startup"""
+        for can_id, decoder_configs in DEFAULT_DECODERS.items():
+            for config in decoder_configs:
+                start_bit = config['byte_index'] * 8
+                
+                if config['data_type'] == 'uint16_le':
+                    length = 16
+                    is_signed = False
+                    is_little_endian = True
+                else:
+                    continue
+                
+                signal = SignalDefinition(
+                    config['name'],
+                    start_bit,
+                    length,
+                    config['scale'],
+                    config['offset'],
+                    is_signed,
+                    is_little_endian,
+                    config['unit']
+                )
+                
+                self.decoder.add_signal_definition(can_id, signal)
+                
+                # Add to listbox
+                decoder_str = f"0x{can_id:X}: {config['name']} ({config['unit']})"
+                self.decoder_listbox.insert(tk.END, decoder_str)
+        
+        self._update_plot_combos()
+    
     def _apply_preset(self, preset_type):
         """Quick preset for voltage or temperature"""
         if preset_type == "voltage":
@@ -289,10 +334,83 @@ class CANAnalyzerGUI:
             self.unit_var.set("°C")
             self.data_type_var.set("int16_le")
     
+    def _on_can_id_selected(self, event=None):
+        """When CAN ID is selected from dropdown, extract the ID"""
+        selected = self.decode_can_id_var.get()
+        # Extract hex value if format is "NAME (0xXXX)"
+        if '(' in selected and ')' in selected:
+            hex_part = selected.split('(')[1].split(')')[0]
+            self.decode_can_id_var.set(hex_part)
+    
+    def _load_predefined_decoders(self):
+        """Load example decoders for selected CAN ID"""
+        try:
+            can_id_str = self.decode_can_id_var.get()
+            # Extract hex value if format is "NAME (0xXXX)"
+            if '(' in can_id_str and ')' in can_id_str:
+                can_id_str = can_id_str.split('(')[1].split(')')[0]
+            
+            can_id = int(can_id_str, 0)
+            
+            if can_id in EXAMPLE_DECODERS:
+                count = 0
+                for decoder_config in EXAMPLE_DECODERS[can_id]:
+                    start_bit = decoder_config['byte_index'] * 8
+                    if decoder_config['data_type'] == 'uint8':
+                        length = 8
+                        is_signed = False
+                        is_little_endian = True
+                    elif decoder_config['data_type'] == 'uint16_le':
+                        length = 16
+                        is_signed = False
+                        is_little_endian = True
+                    elif decoder_config['data_type'] == 'uint16_be':
+                        length = 16
+                        is_signed = False
+                        is_little_endian = False
+                    elif decoder_config['data_type'] == 'int16_le':
+                        length = 16
+                        is_signed = True
+                        is_little_endian = True
+                    elif decoder_config['data_type'] == 'int16_be':
+                        length = 16
+                        is_signed = True
+                        is_little_endian = False
+                    else:
+                        continue
+                    
+                    signal = SignalDefinition(
+                        decoder_config['name'],
+                        start_bit,
+                        length,
+                        decoder_config['scale'],
+                        decoder_config['offset'],
+                        is_signed,
+                        is_little_endian,
+                        decoder_config['unit']
+                    )
+                    self.decoder.add_signal_definition(can_id, signal)
+                    
+                    # Add to listbox
+                    decoder_str = f"0x{can_id:X}: {decoder_config['name']} ({decoder_config['unit']})"
+                    self.decoder_listbox.insert(tk.END, decoder_str)
+                    count += 1
+                
+                self._update_plot_combos()
+                messagebox.showinfo("Success", f"Loaded {count} predefined decoders for CAN ID 0x{can_id:X}")
+            else:
+                messagebox.showwarning("Warning", f"No predefined decoders for CAN ID {can_id_str}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load predefined decoders: {e}")
+    
     def _add_signal_decoder(self):
         """Add a new signal decoder"""
         try:
-            can_id = int(self.decode_can_id_var.get(), 0)
+            can_id_str = self.decode_can_id_var.get()
+            # Extract hex value if format is "NAME (0xXXX)"
+            if '(' in can_id_str and ')' in can_id_str:
+                can_id_str = can_id_str.split('(')[1].split(')')[0]
+            can_id = int(can_id_str, 0)
             signal_name = self.signal_name_var.get()
             byte_index = int(self.byte_index_var.get())
             scale = float(self.scale_var.get())
@@ -378,6 +496,9 @@ class CANAnalyzerGUI:
                 messagebox.showwarning("Warning", "Please select CAN ID and signal")
                 return
             
+            # Extract hex value if format is "NAME (0xXXX)"
+            if '(' in can_id_str and ')' in can_id_str:
+                can_id_str = can_id_str.split('(')[1].split(')')[0]
             can_id = int(can_id_str, 0)
             key = f"{can_id_str}:{signal_name}"
             
@@ -399,6 +520,9 @@ class CANAnalyzerGUI:
         try:
             can_id_str = self.plot_can_id_var.get()
             signal_name = self.plot_signal_var.get()
+            # Extract hex value if format is "NAME (0xXXX)"
+            if '(' in can_id_str and ')' in can_id_str:
+                can_id_str = can_id_str.split('(')[1].split(')')[0]
             key = f"{can_id_str}:{signal_name}"
             
             if key in self.plot_signals:
@@ -429,6 +553,9 @@ class CANAnalyzerGUI:
         try:
             can_id_str = self.plot_can_id_var.get()
             if can_id_str:
+                # Extract hex value if format is "NAME (0xXXX)"
+                if '(' in can_id_str and ')' in can_id_str:
+                    can_id_str = can_id_str.split('(')[1].split(')')[0]
                 can_id = int(can_id_str, 0)
                 signals = self.decoder.get_available_signals(can_id)
                 self.plot_signal_combo['values'] = signals
@@ -581,9 +708,24 @@ class CANAnalyzerGUI:
         line = f"[{timestamp_str}] 0x{can_id:03X}  [{msg['dlc']}] {data_hex}"
         
         if decoded:
-            decoded_str = ", ".join([f"{k}={v:.2f}" if isinstance(v, float) else f"{k}={v}"
-                                    for k, v in decoded.items()])
-            line += f"  |  {decoded_str}"
+            # Format decoded values nicely
+            decoded_parts = []
+            for k, v in decoded.items():
+                if v is None:
+                    continue
+                if isinstance(v, float):
+                    # Use appropriate decimal places based on signal type and unit
+                    if 'temperature' in k.lower() or '°C' in str(decoded.get(k, '')):
+                        decoded_parts.append(f"{k}={v:.2f}°C")
+                    elif 'voltage' in k.lower() or 'V' in str(decoded.get(k, '')):
+                        decoded_parts.append(f"{k}={v:.3f}V")
+                    else:
+                        decoded_parts.append(f"{k}={v:.2f}")
+                else:
+                    decoded_parts.append(f"{k}={v}")
+            
+            if decoded_parts:
+                line += f"  |  {', '.join(decoded_parts)}"
         
         line += "\n"
         
@@ -642,11 +784,49 @@ class CANAnalyzerGUI:
                             for dp in data_points]
                     values = [dp['value'] for dp in data_points]
                     
-                    label = f"{signal_name} (0x{can_id:X})"
+                    # Get CAN ID name and unit if available
+                    from can_ids import get_can_id_name
+                    can_id_name = get_can_id_name(can_id)
+                    
+                    # Get unit from decoder
+                    unit = ""
+                    for sig_def_list in self.decoder.signal_definitions.get(can_id, []):
+                        if sig_def_list.name == signal_name:
+                            unit = sig_def_list.unit
+                            break
+                    
+                    if unit:
+                        label = f"{signal_name} ({can_id_name}) [{unit}]"
+                    else:
+                        label = f"{signal_name} ({can_id_name})"
+                    
                     self.ax.plot(times, values, color=color, label=label, linewidth=2)
         
         if self.plot_signals:
-            self.ax.legend(loc='best')
+            self.ax.legend(loc='best', fontsize=9)
+            # Set y-axis label based on what's being plotted
+            units = set()
+            for plot_info in self.plot_signals.values():
+                can_id = plot_info['can_id']
+                signal_name = plot_info['signal']
+                if can_id in self.decoded_data and signal_name in self.decoded_data[can_id]:
+                    # Try to get unit from decoder
+                    for sig_def_list in self.decoder.signal_definitions.get(can_id, []):
+                        if sig_def_list.name == signal_name:
+                            units.add(sig_def_list.unit)
+                            break
+            
+            if len(units) == 1:
+                unit_str = list(units)[0]
+                if unit_str:
+                    self.ax.set_ylabel(f"Value ({unit_str})")
+                else:
+                    self.ax.set_ylabel("Value")
+            elif len(units) > 1:
+                # Multiple units - show as "Value (mixed units)"
+                self.ax.set_ylabel("Value (mixed units)")
+            else:
+                self.ax.set_ylabel("Value")
         
         self.canvas.draw()
     

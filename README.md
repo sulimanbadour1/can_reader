@@ -72,6 +72,7 @@ brew install python-tk
 - Tkinter usually included with Python
 - Install drivers for your USB CAN adapter
 - Use `slcan` or `usb2can` interface type
+- Default settings: Interface=`slcan`, Channel=`COM3`
 
 ### Troubleshooting Installation
 
@@ -107,15 +108,20 @@ python can_gui.py
 ```
 
 **Basic Workflow:**
-1. **Connect**: Select interface (socketcan, USB, etc.), channel, bitrate → Click "Connect"
-2. **Add Decoders**: Configure how to decode CAN messages:
+1. **Connect**: Select interface (slcan, socketcan, USB, etc.), channel (COM3, can0, etc.), bitrate → Click "Connect"
+2. **Default Decoders**: Three default decoders are automatically loaded:
+   - **CAN ID 0x259**: `analog_voltage_in1` at bytes 0-1 (uint16_le)
+   - **CAN ID 0x25E**: `internal_voltage` at bytes 2-3 (uint16_le)
+   - **CAN ID 0x25E**: `temperature` at bytes 4-5 (uint16_le)
+3. **Add More Decoders** (optional): Configure additional signal decoders:
    - CAN ID (hex, e.g., `0x123`)
    - Signal name (e.g., `voltage`, `temperature`)
    - Byte index, scale, offset, data type
    - Use presets: "Voltage (16-bit)" or "Temp (16-bit)"
-3. **Capture**: Click "Start Capture" to read messages
-4. **Plot**: Select CAN ID and signal → Click "Add to Plot"
-5. **Export**: Click "Export CSV" to save data
+   - Or click "Load Predefined" for other CAN IDs
+4. **Capture**: Click "Start Capture" to read messages
+5. **Plot**: Select CAN ID and signal → Click "Add to Plot"
+6. **Export**: Click "Export CSV" to save data
 
 ### Command Line Usage
 
@@ -170,6 +176,22 @@ python can_reader.py --interface socketcan --channel can0 --duration 10 --plot f
 
 ## GUI Usage Guide
 
+### Default Decoders
+
+The GUI automatically loads three default signal decoders on startup:
+
+| CAN ID | Signal             | Bytes (index) | Data Type | Example Raw Value |
+| ------ | ------------------ | ------------: | --------- | ----------------- |
+| 0x259  | analog_voltage_in1 |         b0–b1 | uint16_le | 55043 (0xD703)    |
+| 0x25E  | internal_voltage   |         b2–b3 | uint16_le | 60421 (0xEC05)    |
+| 0x25E  | temperature        |         b4–b5 | uint16_le | 47366 (0xB906)    |
+
+These decoders are configured to read raw uint16 little-endian values. You can adjust the scale and offset in the decoder panel if you need to convert to physical units (volts, degrees Celsius, etc.).
+
+**Byte Interpretation:**
+- Little-endian means: `raw = b0 + (b1 << 8)`
+- Example: `03 D7` → `0x03 + (0xD7 << 8)` = `0xD703` = 55043
+
 ### Signal Decoder Configuration
 
 Configure how to decode CAN messages into physical values:
@@ -218,7 +240,28 @@ Configure how to decode CAN messages into physical values:
 - **Big Endian**: Most significant byte first (network byte order)
   - Example: `0x1234` stored as `[0x12, 0x34]`
 
-### Example Workflow: Monitoring Battery Voltage and Temperature
+### Example Workflow: Using Default Decoders
+
+1. **Launch GUI**: `python can_gui.py`
+   - Default decoders are automatically loaded (analog_voltage_in1, internal_voltage, temperature)
+
+2. **Connect** to CAN bus:
+   - Default: Interface=`slcan`, Channel=`COM3` (Windows)
+   - Or change to your interface/channel
+   - Click "Connect"
+
+3. **Start Capture**: Click "Start Capture" to begin reading messages
+
+4. **Add Signals to Plot**:
+   - Select CAN ID `0x259` → Select signal `analog_voltage_in1` → Click "Add to Plot"
+   - Select CAN ID `0x25E` → Select signal `internal_voltage` → Click "Add to Plot"
+   - Select CAN ID `0x25E` → Select signal `temperature` → Click "Add to Plot"
+
+5. **Monitor** real-time plots showing all three signals
+
+6. **Export** CSV for analysis or reporting
+
+### Example Workflow: Custom Battery Voltage and Temperature
 
 1. **Connect** to CAN bus (e.g., socketcan on can0)
 
@@ -377,6 +420,7 @@ python can_reader.py --interface socketcan --channel can0 --duration 60 \
 - matplotlib >= 3.7.0
 - numpy >= 1.24.0
 - pandas >= 2.0.0
+- pyserial >= 3.5 (required for slcan interface)
 
 ## Tips
 
@@ -413,9 +457,16 @@ This section explains what each file and major component does.
 - `CANDecoder` class: Decodes CAN messages into physical values
 - Helper functions: Pre-built decoders for voltage, temperature, current
 
+**`can_ids.py`** - CAN ID definitions and default decoders
+- Predefined CAN IDs: 0x258 (Keep Alive), 0x259 (AIN1-4), 0x25A-0x25E (other inputs)
+- `DEFAULT_DECODERS`: Three default signals automatically loaded in GUI
+- `EXAMPLE_DECODERS`: Additional decoder configurations for all CAN IDs
+
 **`run_gui.py`** - Simple launcher script for the GUI
 
 **`example_usage.py`** - Example code showing how to use the API programmatically
+
+**`example_setup.py`** - Example showing how to set up all decoders programmatically
 
 **`setup.sh` / `setup.bat`** - Automated installation scripts
 
