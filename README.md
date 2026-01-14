@@ -196,6 +196,16 @@ These decoders are configured to read raw uint16 little-endian values. You can a
 
 Configure how to decode CAN messages into physical values:
 
+**Quick Understanding:**
+- **Byte Index**: Which byte position (0-7) your signal starts at in the 8-byte CAN message
+  - Example: Byte Index `0` means signal starts at byte 0 (uses bytes 0-1 for 16-bit signals)
+- **Data Type**: How to interpret those bytes
+  - **`uint16_le`** = unsigned 16-bit integer, little endian (most common)
+  - **`int16_le`** = signed 16-bit integer, little endian (can be negative)
+- **Scale**: Multiply raw value by this to get physical units
+  - Example: Scale `0.001` means raw value 55043 → 55.043V
+- **Offset**: Add this to scaled value (often used for temperature: -40°C offset)
+
 **Common Configurations:**
 
 **Voltage (16-bit, Little Endian):**
@@ -227,18 +237,74 @@ Configure how to decode CAN messages into physical values:
 
 ### Data Types
 
+**What is `uint16_le`?**
+- **uint** = Unsigned integer (no negative numbers, only 0 and positive)
+- **16** = 16 bits (2 bytes) of data
+- **le** = Little Endian (least significant byte first)
+
+**Available Data Types:**
+
 - **uint8**: Unsigned 8-bit integer (0-255)
+  - Uses 1 byte (byte index 0-7)
+  - Example: `0xFF` = 255
+
 - **uint16_le**: Unsigned 16-bit, little endian (0-65535)
+  - Uses 2 bytes, least significant byte first
+  - Example: Bytes `[0x34, 0x12]` = `0x1234` = 4660
+  - Most common format for CAN signals
+
 - **uint16_be**: Unsigned 16-bit, big endian (0-65535)
+  - Uses 2 bytes, most significant byte first
+  - Example: Bytes `[0x12, 0x34]` = `0x1234` = 4660
+  - Network byte order
+
 - **int16_le**: Signed 16-bit, little endian (-32768 to 32767)
+  - Uses 2 bytes, can be negative
+  - Example: `0xFFFF` = -1 (two's complement)
+
 - **int16_be**: Signed 16-bit, big endian (-32768 to 32767)
+  - Uses 2 bytes, can be negative, big endian
+
+### Byte Index (Where Your Signal Starts)
+
+**What is Byte Index?**
+- Each CAN message has 8 data bytes: `b0, b1, b2, b3, b4, b5, b6, b7`
+- **Byte Index** tells you which byte your signal starts at (0-7)
+- For 16-bit signals (uint16_le/int16_le), the signal uses 2 consecutive bytes
+
+**Examples:**
+- **Byte Index 0**: Signal starts at byte 0 (uses bytes 0-1 for 16-bit)
+- **Byte Index 2**: Signal starts at byte 2 (uses bytes 2-3 for 16-bit)
+- **Byte Index 4**: Signal starts at byte 4 (uses bytes 4-5 for 16-bit)
+
+**Real Example from Your CAN Messages:**
+```
+CAN Frame: [b0, b1, b2, b3, b4, b5, b6, b7]
+           03  D7  00  00  00  00  00  00
+           
+analog_voltage_in1: Byte Index 0 → reads bytes b0-b1 (03 D7)
+                    → uint16_le: 0x03 + (0xD7 << 8) = 0xD703 = 55043
+                    → Scale 0.001: 55043 × 0.001 = 55.043V
+
+internal_voltage:    Byte Index 2 → reads bytes b2-b3 (05 EC)
+                    → uint16_le: 0x05 + (0xEC << 8) = 0xEC05 = 60421
+                    → Scale 0.001: 60421 × 0.001 = 60.421V
+
+temperature:         Byte Index 4 → reads bytes b4-b5 (06 B9)
+                    → uint16_le: 0x06 + (0xB9 << 8) = 0xB906 = 47366
+                    → Scale 0.001: 47366 × 0.001 = 47.366°C
+```
 
 ### Byte Order (Endianness)
 
-- **Little Endian**: Least significant byte first (common on x86/x64)
-  - Example: `0x1234` stored as `[0x34, 0x12]`
-- **Big Endian**: Most significant byte first (network byte order)
-  - Example: `0x1234` stored as `[0x12, 0x34]`
+**Little Endian** (`_le`): Least significant byte first (common on x86/x64, most CAN devices)
+- Example: Value `0x1234` stored as bytes `[0x34, 0x12]`
+- Reading bytes `[0x34, 0x12]` as uint16_le: `0x34 + (0x12 << 8)` = `0x1234`
+- **Most common** for CAN bus signals
+
+**Big Endian** (`_be`): Most significant byte first (network byte order)
+- Example: Value `0x1234` stored as bytes `[0x12, 0x34]`
+- Reading bytes `[0x12, 0x34]` as uint16_be: `(0x12 << 8) + 0x34` = `0x1234`
 
 ### Example Workflow: Using Default Decoders
 
@@ -268,20 +334,20 @@ Configure how to decode CAN messages into physical values:
 2. **Add Voltage Decoder:**
    - CAN ID: `0x100`
    - Signal: `battery_voltage`
-   - Byte Index: `0`
-   - Scale: `0.01`
-   - Offset: `0`
+   - **Byte Index: `0`** (reads bytes 0-1 from CAN frame)
+   - Scale: `0.01` (multiply raw value by 0.01 to get volts)
+   - Offset: `0` (add this to scaled value)
    - Unit: `V`
-   - Data Type: `uint16_le`
+   - **Data Type: `uint16_le`** (16-bit unsigned, little endian)
 
 3. **Add Temperature Decoder:**
    - CAN ID: `0x100`
    - Signal: `battery_temp`
-   - Byte Index: `2`
-   - Scale: `0.1`
-   - Offset: `-40`
+   - **Byte Index: `2`** (reads bytes 2-3 from CAN frame)
+   - Scale: `0.1` (multiply raw value by 0.1 to get degrees)
+   - Offset: `-40` (subtract 40 from scaled value)
    - Unit: `°C`
-   - Data Type: `int16_le`
+   - **Data Type: `int16_le`** (16-bit signed, little endian - can be negative)
 
 4. **Start Capture** and watch messages appear
 

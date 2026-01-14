@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # CAN Bus Analyzer GUI
 # Simple Tkinter app to read CAN messages and plot voltage, temp, etc.
+#  SB2025
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
@@ -17,14 +18,33 @@ from can_reader import CANReader
 from can_decoder import CANDecoder, SignalDefinition
 from can_ids import CAN_IDS, CAN_ID_NAMES, EXAMPLE_DECODERS, DEFAULT_DECODERS, get_can_id_hex
 
+# Use a nicer matplotlib style
+try:
+    plt.style.use('seaborn-v0_8-darkgrid')
+except:
+    plt.style.use('seaborn-darkgrid')
+
 
 class CANAnalyzerGUI:
     """Main GUI window"""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("CAN Bus Analyzer")
+        self.root.title("CAN Bus Analyzer - SB2025")
         self.root.geometry("1400x900")
+        
+        # Configure root window style
+        self.root.configure(bg='#f0f0f0')
+        
+        # Configure ttk style
+        ttk_style = ttk.Style()
+        ttk_style.theme_use('clam')
+        ttk_style.configure('TLabel', background='#f0f0f0', font=('Segoe UI', 9))
+        ttk_style.configure('TFrame', background='#f0f0f0')
+        ttk_style.configure('TLabelFrame', background='#f0f0f0', font=('Segoe UI', 9, 'bold'))
+        ttk_style.configure('TLabelFrame.Label', background='#f0f0f0', font=('Segoe UI', 9, 'bold'))
+        ttk_style.configure('TButton', font=('Segoe UI', 9))
+        ttk_style.map('TButton', background=[('active', '#e0e0e0')])
         
         # CAN stuff
         self.reader = None
@@ -39,7 +59,13 @@ class CANAnalyzerGUI:
         
         # What signals to plot
         self.plot_signals = {}
+        # Use a nicer color palette
+        self.colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#6A994E', 
+                      '#BC4749', '#F77F00', '#FCBF49', '#06A77D', '#118AB2']
         self.color_index = 0
+        
+        # Track decoder listbox items for removal
+        self.decoder_listbox_items = []  # List of (can_id, signal_name) tuples
         
         # Threading stuff
         self.processing_thread = None
@@ -101,10 +127,21 @@ class CANAnalyzerGUI:
         self.connect_btn = ttk.Button(conn_frame, text="Connect", command=self._toggle_connection)
         self.connect_btn.grid(row=3, column=0, columnspan=2, pady=10, sticky=tk.EW)
         
-        # Status label
+        # Status label with better styling
         self.status_label = ttk.Label(conn_frame, text="Status: Disconnected", 
-                                     foreground="red")
+                                     foreground="red", font=('Segoe UI', 9, 'bold'))
         self.status_label.grid(row=4, column=0, columnspan=2, pady=5)
+        
+        # Max data points setting (always visible)
+        ttk.Label(conn_frame, text="Max Data Points:").grid(row=5, column=0, sticky=tk.W, pady=2)
+        self.max_points_var = tk.StringVar(value="1000")
+        max_points_entry = ttk.Entry(conn_frame, textvariable=self.max_points_var, width=10)
+        max_points_entry.grid(row=5, column=1, sticky=tk.W, pady=2, padx=5)
+        
+        # Author ID
+        author_label = ttk.Label(conn_frame, text="SB2025", 
+                                font=('Segoe UI', 7), foreground='#888888')
+        author_label.grid(row=6, column=0, columnspan=2, pady=2)
         
     def _setup_decoder_panel(self, parent):
         """Panel to configure how to decode CAN messages into voltage, temp, etc."""
@@ -212,19 +249,18 @@ class CANAnalyzerGUI:
         ttk.Button(plot_ctrl_frame, text="Export CSV", 
                   command=self._export_csv).pack(fill=tk.X, pady=2)
         
-        # Max data points to keep in memory
-        ttk.Label(plot_ctrl_frame, text="Max Data Points:").pack(anchor=tk.W, pady=2)
-        self.max_points_var = tk.StringVar(value="1000")
-        max_points_entry = ttk.Entry(plot_ctrl_frame, textvariable=self.max_points_var, width=10)
-        max_points_entry.pack(anchor=tk.W, pady=2)
-        
     def _setup_message_display(self, parent):
         """Text area showing raw CAN messages"""
         msg_frame = ttk.LabelFrame(parent, text="CAN Messages", padding=5)
         msg_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         self.message_text = scrolledtext.ScrolledText(msg_frame, height=15, width=60,
-                                                      font=("Courier", 9))
+                                                      font=("Consolas", 9),
+                                                      bg='#ffffff', fg='#333333',
+                                                      insertbackground='#333333',
+                                                      selectbackground='#4a9eff',
+                                                      selectforeground='white',
+                                                      relief=tk.FLAT, borderwidth=1)
         self.message_text.pack(fill=tk.BOTH, expand=True)
         
         # Filter by CAN ID
@@ -242,13 +278,17 @@ class CANAnalyzerGUI:
         plot_frame = ttk.LabelFrame(parent, text="Real-Time Plots", padding=5)
         plot_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create plot
-        self.fig = Figure(figsize=(10, 6), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Value")
-        self.ax.set_title("CAN Signal Values")
-        self.ax.grid(True, alpha=0.3)
+        # Create plot with better styling
+        self.fig = Figure(figsize=(10, 6), dpi=100, facecolor='white')
+        self.ax = self.fig.add_subplot(111, facecolor='#fafafa')
+        self.ax.set_xlabel("Time (s)", fontsize=11, fontweight='bold')
+        self.ax.set_ylabel("Value", fontsize=11, fontweight='bold')
+        self.ax.set_title("CAN Signal Values", fontsize=13, fontweight='bold', pad=15)
+        self.ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5)
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
         
         # Embed in tkinter
         self.canvas = FigureCanvasTkAgg(self.fig, plot_frame)
@@ -282,6 +322,16 @@ class CANAnalyzerGUI:
         ttk.Button(plot_select_frame, text="Remove from Plot", 
                   command=self._remove_from_plot).pack(side=tk.LEFT, padx=5)
         
+        # List of currently plotted signals
+        ttk.Label(plot_select_frame, text="Plotted:").pack(side=tk.LEFT, padx=(10, 5))
+        self.plotted_signals_listbox = tk.Listbox(plot_select_frame, height=1, width=30)
+        self.plotted_signals_listbox.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(plot_select_frame, text="Remove Selected", 
+                  command=self._remove_selected_from_plot).pack(side=tk.LEFT, padx=5)
+        ttk.Button(plot_select_frame, text="Clear All", 
+                  command=self._clear_all_plots).pack(side=tk.LEFT, padx=5)
+        
         self.plot_id_combo = plot_id_combo
         self.plot_signal_combo = plot_signal_combo
         
@@ -311,9 +361,10 @@ class CANAnalyzerGUI:
                 
                 self.decoder.add_signal_definition(can_id, signal)
                 
-                # Add to listbox
+                # Add to listbox and track it
                 decoder_str = f"0x{can_id:X}: {config['name']} ({config['unit']})"
                 self.decoder_listbox.insert(tk.END, decoder_str)
+                self.decoder_listbox_items.append((can_id, config['name']))
         
         self._update_plot_combos()
     
@@ -451,9 +502,10 @@ class CANAnalyzerGUI:
                                      is_signed, is_little_endian, unit)
             self.decoder.add_signal_definition(can_id, signal)
             
-            # Add to listbox
+            # Add to listbox and track it
             decoder_str = f"0x{can_id:X}: {signal_name} ({unit})"
             self.decoder_listbox.insert(tk.END, decoder_str)
+            self.decoder_listbox_items.append((can_id, signal_name))
             
             # Update dropdowns
             self._update_plot_combos()
@@ -464,14 +516,54 @@ class CANAnalyzerGUI:
             messagebox.showerror("Error", f"Failed to add decoder: {e}")
     
     def _remove_signal_decoder(self):
-        """Remove selected decoder (TODO: make this actually work properly)"""
+        """Remove selected decoder from listbox and decoder"""
         selection = self.decoder_listbox.curselection()
         if not selection:
             messagebox.showwarning("Warning", "Please select a decoder to remove")
             return
         
-        # TODO: Actually implement removal
-        messagebox.showinfo("Info", "Decoder removal not fully implemented yet")
+        try:
+            # Get the selected index
+            index = selection[0]
+            
+            # Get the decoder info
+            if index < len(self.decoder_listbox_items):
+                can_id, signal_name = self.decoder_listbox_items[index]
+                
+                # Remove from decoder
+                if can_id in self.decoder.signal_definitions:
+                    # Find and remove the signal definition
+                    signals_to_keep = [s for s in self.decoder.signal_definitions[can_id] 
+                                      if s.name != signal_name]
+                    if signals_to_keep:
+                        self.decoder.signal_definitions[can_id] = signals_to_keep
+                    else:
+                        # No more signals for this CAN ID, remove the entry
+                        del self.decoder.signal_definitions[can_id]
+                
+                # Remove from listbox
+                self.decoder_listbox.delete(index)
+                self.decoder_listbox_items.pop(index)
+                
+                # Remove from plot if it's being plotted
+                key = f"0x{can_id:X}:{signal_name}"
+                if key in self.plot_signals:
+                    del self.plot_signals[key]
+                    self._update_plot_legend()
+                
+                # Clear decoded data for this signal
+                if can_id in self.decoded_data and signal_name in self.decoded_data[can_id]:
+                    del self.decoded_data[can_id][signal_name]
+                
+                # Update dropdowns
+                self._update_plot_combos()
+                
+                messagebox.showinfo("Success", f"Removed decoder: {signal_name} (0x{can_id:X})")
+            else:
+                messagebox.showerror("Error", "Invalid selection")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to remove decoder: {e}")
     
     def _update_plot_combos(self):
         """Update the CAN ID and signal dropdowns"""
@@ -506,20 +598,28 @@ class CANAnalyzerGUI:
                 self.plot_signals[key] = {
                     'can_id': can_id,
                     'signal': signal_name,
-                    'color': plt.cm.tab10(self.color_index % 10)
+                    'color': self.colors[self.color_index % len(self.colors)]
                 }
                 self.color_index += 1
                 self._update_plot_legend()
-                messagebox.showinfo("Success", f"Added {signal_name} to plot")
+                self._update_plotted_signals_list()
+                # Don't show messagebox for every add, just update silently
+            else:
+                messagebox.showinfo("Info", f"{signal_name} is already plotted")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add to plot: {e}")
     
     def _remove_from_plot(self):
-        """Remove signal from plot"""
+        """Remove signal from plot using dropdown selection"""
         try:
             can_id_str = self.plot_can_id_var.get()
             signal_name = self.plot_signal_var.get()
+            
+            if not can_id_str or not signal_name:
+                messagebox.showwarning("Warning", "Please select CAN ID and signal to remove")
+                return
+            
             # Extract hex value if format is "NAME (0xXXX)"
             if '(' in can_id_str and ')' in can_id_str:
                 can_id_str = can_id_str.split('(')[1].split(')')[0]
@@ -528,18 +628,99 @@ class CANAnalyzerGUI:
             if key in self.plot_signals:
                 del self.plot_signals[key]
                 self._update_plot_legend()
-                messagebox.showinfo("Success", f"Removed {signal_name} from plot")
+                self._update_plotted_signals_list()
+                # Don't show messagebox, just update silently
+            else:
+                messagebox.showinfo("Info", f"{signal_name} is not currently plotted")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to remove from plot: {e}")
     
+    def _remove_selected_from_plot(self):
+        """Remove selected signal from plotted signals listbox"""
+        selection = self.plotted_signals_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select a signal to remove from plot")
+            return
+        
+        try:
+            index = selection[0]
+            item_text = self.plotted_signals_listbox.get(index)
+            
+            # Parse the item text to get the key
+            # Format: "signal_name (CAN_ID) [unit]"
+            parts = item_text.split(' (')
+            if len(parts) >= 2:
+                signal_name = parts[0]
+                can_id_part = parts[1].split(')')[0]
+                
+                # Find the key in plot_signals
+                for key, plot_info in list(self.plot_signals.items()):
+                    if plot_info['signal'] == signal_name and f"0x{plot_info['can_id']:X}" == can_id_part:
+                        del self.plot_signals[key]
+                        self._update_plot_legend()
+                        self._update_plotted_signals_list()
+                        messagebox.showinfo("Success", f"Removed {signal_name} from plot")
+                        return
+                
+                messagebox.showwarning("Warning", "Could not find signal to remove")
+            else:
+                messagebox.showerror("Error", "Invalid signal format")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to remove signal: {e}")
+    
+    def _clear_all_plots(self):
+        """Remove all signals from plot"""
+        if self.plot_signals:
+            self.plot_signals.clear()
+            self._update_plot_legend()
+            self._update_plotted_signals_list()
+            messagebox.showinfo("Info", "All signals removed from plot")
+        else:
+            messagebox.showinfo("Info", "No signals to remove")
+    
+    def _update_plotted_signals_list(self):
+        """Update the listbox showing currently plotted signals"""
+        self.plotted_signals_listbox.delete(0, tk.END)
+        
+        for key, plot_info in self.plot_signals.items():
+            can_id = plot_info['can_id']
+            signal_name = plot_info['signal']
+            
+            # Get unit from decoder
+            unit = ""
+            for sig_def_list in self.decoder.signal_definitions.get(can_id, []):
+                if sig_def_list.name == signal_name:
+                    unit = sig_def_list.unit
+                    break
+            
+            from can_ids import get_can_id_name
+            can_id_name = get_can_id_name(can_id)
+            
+            if unit:
+                display_text = f"{signal_name} ({can_id_name}) [{unit}]"
+            else:
+                display_text = f"{signal_name} ({can_id_name})"
+            
+            self.plotted_signals_listbox.insert(tk.END, display_text)
+        
+        # Adjust listbox height based on number of items
+        num_items = len(self.plot_signals)
+        self.plotted_signals_listbox.config(height=min(max(1, num_items), 4))
+    
     def _update_plot_legend(self):
         """Update plot legend"""
         self.ax.clear()
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Value")
-        self.ax.set_title("CAN Signal Values")
-        self.ax.grid(True, alpha=0.3)
+        self.ax.set_facecolor('#fafafa')
+        self.ax.set_xlabel("Time (s)", fontsize=11, fontweight='bold')
+        self.ax.set_ylabel("Value", fontsize=11, fontweight='bold')
+        self.ax.set_title("CAN Signal Values", fontsize=13, fontweight='bold', pad=15)
+        self.ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5)
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
         
         if self.plot_signals:
             labels = [f"{v['signal']} (0x{v['can_id']:X})" 
@@ -583,7 +764,7 @@ class CANAnalyzerGUI:
             if self.reader.connect():
                 self.is_connected = True
                 self.connect_btn.config(text="Disconnect")
-                self.status_label.config(text="Status: Connected", foreground="green")
+                self.status_label.config(text="Status: Connected", foreground="#28a745")
                 self.capture_btn.config(state=tk.NORMAL)
                 messagebox.showinfo("Success", f"Connected to {interface} on {channel}")
             else:
@@ -603,7 +784,7 @@ class CANAnalyzerGUI:
         
         self.is_connected = False
         self.connect_btn.config(text="Connect")
-        self.status_label.config(text="Status: Disconnected", foreground="red")
+        self.status_label.config(text="Status: Disconnected", foreground="#dc3545")
         self.capture_btn.config(state=tk.DISABLED)
     
     def _toggle_capture(self):
@@ -800,10 +981,13 @@ class CANAnalyzerGUI:
                     else:
                         label = f"{signal_name} ({can_id_name})"
                     
-                    self.ax.plot(times, values, color=color, label=label, linewidth=2)
+                    # Use nicer line styling
+                    self.ax.plot(times, values, color=color, label=label, 
+                               linewidth=2.5, alpha=0.8, marker='o', markersize=3, markevery=10)
         
         if self.plot_signals:
-            self.ax.legend(loc='best', fontsize=9)
+            self.ax.legend(loc='best', fontsize=10, framealpha=0.9, 
+                         fancybox=True, shadow=True, frameon=True)
             # Set y-axis label based on what's being plotted
             units = set()
             for plot_info in self.plot_signals.values():
@@ -835,10 +1019,16 @@ class CANAnalyzerGUI:
         self.decoded_data.clear()
         self.message_text.delete('1.0', tk.END)
         self.ax.clear()
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Value")
-        self.ax.set_title("CAN Signal Values")
-        self.ax.grid(True, alpha=0.3)
+        self.ax.set_facecolor('#fafafa')
+        self.ax.set_xlabel("Time (s)", fontsize=11, fontweight='bold')
+        self.ax.set_ylabel("Value", fontsize=11, fontweight='bold')
+        self.ax.set_title("CAN Signal Values", fontsize=13, fontweight='bold', pad=15)
+        self.ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5)
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self._update_plotted_signals_list()
         self.canvas.draw()
         messagebox.showinfo("Info", "Data cleared")
     
