@@ -32,6 +32,7 @@ class CANAnalyzerGUI:
         self.root = root
         self.root.title("CAN Bus Analyzer - SB2025")
         self.root.geometry("1400x900")
+        self.root.minsize(1000, 600)  # Set minimum window size
         
         # Configure root window style
         self.root.configure(bg='#f0f0f0')
@@ -57,6 +58,14 @@ class CANAnalyzerGUI:
         self.decoded_data = defaultdict(lambda: defaultdict(deque))
         self.max_data_points = 1000
         
+        # Error banner state
+        self.error_banner_frame = None
+        self.error_banner_outer = None
+        self.error_label = None
+        self.error_title_label = None
+        self.current_error = None
+        self.error_banner_flashing = False
+        
         # What signals to plot
         self.plot_signals = {}
         # Use a nicer color palette
@@ -79,26 +88,239 @@ class CANAnalyzerGUI:
         
     def _setup_ui(self):
         """Build the GUI"""
+        # Error banner at the top (always visible when there's an error)
+        self._setup_error_banner()
+        
         # Split window into left (controls) and right (plots/messages)
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        left_frame = ttk.Frame(main_paned)
-        main_paned.add(left_frame, weight=1)
+        # Create scrollable left frame for controls
+        left_container = ttk.Frame(main_paned)
+        main_paned.add(left_container, weight=1)
         
-        right_frame = ttk.Frame(main_paned)
-        main_paned.add(right_frame, weight=3)
+        # Canvas and scrollbar for left panel
+        self.left_canvas = tk.Canvas(left_container, bg='#f0f0f0', highlightthickness=0)
+        left_scrollbar = ttk.Scrollbar(left_container, orient="vertical", command=self.left_canvas.yview)
+        left_frame = ttk.Frame(self.left_canvas)
+        
+        # Configure scrollable region
+        def update_scroll_region(event=None):
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+        
+        left_frame.bind("<Configure>", update_scroll_region)
+        
+        canvas_window = self.left_canvas.create_window((0, 0), window=left_frame, anchor="nw")
+        self.left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        
+        # Update canvas window width when canvas is resized
+        def configure_canvas_width(event):
+            canvas_width = event.width
+            self.left_canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        self.left_canvas.bind('<Configure>', configure_canvas_width)
+        
+        # Pack canvas and scrollbar
+        self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        left_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Mouse wheel scrolling for left panel
+        def _on_mousewheel(event):
+            self.left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.left_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Create vertical paned window for right side (messages and plots)
+        right_paned = ttk.PanedWindow(main_paned, orient=tk.VERTICAL)
+        main_paned.add(right_paned, weight=3)
+        
+        # Top: Message display
+        msg_container = ttk.Frame(right_paned)
+        right_paned.add(msg_container, weight=1)
+        
+        # Bottom: Plot area
+        plot_container = ttk.Frame(right_paned)
+        right_paned.add(plot_container, weight=2)
         
         self._setup_connection_panel(left_frame)
         self._setup_decoder_panel(left_frame)
         self._setup_plot_controls(left_frame)
-        self._setup_message_display(right_frame)
-        self._setup_plot_area(right_frame)
+        self._setup_message_display(msg_container)
+        self._setup_plot_area(plot_container)
+    
+    def _setup_error_banner(self):
+        """Create error banner at the top of the window - visible and user-friendly"""
+        # Outer frame with border/shadow effect
+        self.error_banner_outer = tk.Frame(self.root, bg="#8B0000", height=0)
+        self.error_banner_outer.pack_propagate(False)
+        
+        # Main error banner frame with bright red background
+        self.error_banner_frame = tk.Frame(self.error_banner_outer, bg="#FF4444", 
+                                          relief=tk.RAISED, bd=3)
+        self.error_banner_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        
+        # Error content frame with padding
+        error_content = tk.Frame(self.error_banner_frame, bg="#FF4444")
+        error_content.pack(fill=tk.X, padx=15, pady=12)
+        
+        # Left side: Large error icon
+        icon_frame = tk.Frame(error_content, bg="#FF4444")
+        icon_frame.pack(side=tk.LEFT, padx=(0, 15))
+        
+        error_icon = tk.Label(icon_frame, text="⚠", bg="#FF4444", 
+                             fg="white", font=('Segoe UI', 24, 'bold'))
+        error_icon.pack()
+        
+        # Center: Error message with better styling
+        message_frame = tk.Frame(error_content, bg="#FF4444")
+        message_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Error title
+        self.error_title_label = tk.Label(message_frame, text="ERROR", 
+                                         bg="#FF4444", fg="white", 
+                                         font=('Segoe UI', 11, 'bold'),
+                                         anchor=tk.W)
+        self.error_title_label.pack(anchor=tk.W, pady=(0, 3))
+        
+        # Error message
+        self.error_label = tk.Label(message_frame, text="", bg="#FF4444", 
+                                    fg="white", font=('Segoe UI', 11),
+                                    wraplength=1100, justify=tk.LEFT,
+                                    anchor=tk.W)
+        self.error_label.pack(anchor=tk.W, fill=tk.X)
+        
+        # Right side: Close button (more obvious)
+        close_frame = tk.Frame(error_content, bg="#FF4444")
+        close_frame.pack(side=tk.RIGHT, padx=(15, 0))
+        
+        close_btn = tk.Button(close_frame, text="✕ CLOSE", bg="#CC0000", fg="white",
+                             font=('Segoe UI', 10, 'bold'), relief=tk.RAISED,
+                             command=self._hide_error_banner, cursor="hand2",
+                             activebackground="#990000", activeforeground="white",
+                             bd=2, padx=12, pady=6,
+                             highlightthickness=2, highlightbackground="#FF6666")
+        close_btn.pack()
+        
+        # Animation state
+        self.error_banner_flashing = False
+        
+        # Initially hidden
+        self._hide_error_banner()
+    
+    def _flash_error_banner(self, count=0):
+        """Flash the error banner to draw attention"""
+        if not self.error_banner_frame or not self.error_banner_flashing:
+            return
+        
+        try:
+            if count < 6:  # Flash 6 times (3 cycles)
+                if count % 2 == 0:
+                    # Brighter red flash
+                    bg_color = "#FF0000"
+                    btn_bg = "#AA0000"
+                else:
+                    # Normal red
+                    bg_color = "#FF4444"
+                    btn_bg = "#CC0000"
+                
+                # Update main frame
+                self.error_banner_frame.config(bg=bg_color)
+                
+                # Update all child widgets
+                self._update_widget_colors(self.error_banner_frame, bg_color, btn_bg)
+                
+                # Schedule next flash
+                self.root.after(150, lambda: self._flash_error_banner(count + 1))
+            else:
+                self.error_banner_flashing = False
+        except tk.TclError:
+            # Widget destroyed, stop flashing
+            self.error_banner_flashing = False
+    
+    def _update_widget_colors(self, parent, bg_color, btn_bg):
+        """Recursively update widget colors"""
+        try:
+            for widget in parent.winfo_children():
+                if isinstance(widget, tk.Frame):
+                    widget.config(bg=bg_color)
+                    self._update_widget_colors(widget, bg_color, btn_bg)
+                elif isinstance(widget, tk.Label):
+                    widget.config(bg=bg_color)
+                elif isinstance(widget, tk.Button):
+                    widget.config(bg=btn_bg, activebackground="#990000")
+        except (tk.TclError, AttributeError):
+            pass  # Widget might be destroyed
+    
+    def _show_error_banner(self, error_message):
+        """Show error banner with message - make it very obvious"""
+        self.current_error = error_message
+        if self.error_label and self.error_banner_frame:
+            # Update message
+            self.error_label.config(text=error_message)
+            
+            # Determine error type for title
+            error_lower = error_message.lower()
+            if "connection" in error_lower or "connect" in error_lower:
+                error_type = "CONNECTION ERROR"
+            elif "decoder" in error_lower:
+                error_type = "DECODER ERROR"
+            elif "plot" in error_lower:
+                error_type = "PLOT ERROR"
+            elif "export" in error_lower:
+                error_type = "EXPORT ERROR"
+            elif "reading message" in error_lower or "processing message" in error_lower:
+                error_type = "CAN MESSAGE ERROR"
+            else:
+                error_type = "ERROR"
+            
+            self.error_title_label.config(text=error_type)
+            
+            # Set height to be more prominent
+            self.error_banner_outer.config(height=80)
+            
+            # Pack it at the top (most visible position)
+            try:
+                # Try to pack before other widgets
+                children = self.root.winfo_children()
+                if children and self.error_banner_outer not in children:
+                    self.error_banner_outer.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0, before=children[0])
+                elif self.error_banner_outer not in children:
+                    self.error_banner_outer.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
+            except (tk.TclError, IndexError, AttributeError):
+                # Fallback: just pack normally
+                try:
+                    self.error_banner_outer.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
+                except tk.TclError:
+                    pass  # Already packed
+            
+            # Flash animation to draw attention
+            self.error_banner_flashing = True
+            self._flash_error_banner(0)
+            
+            # Auto-hide after 10 seconds (optional, user can still close manually)
+            if hasattr(self, '_error_auto_hide_id'):
+                self.root.after_cancel(self._error_auto_hide_id)
+            self._error_auto_hide_id = self.root.after(10000, self._hide_error_banner)
+    
+    def _hide_error_banner(self):
+        """Hide error banner"""
+        self.current_error = None
+        self.error_banner_flashing = False
+        if self.error_banner_outer:
+            self.error_banner_outer.config(height=0)
+            self.error_banner_outer.pack_forget()
+        
+        # Cancel auto-hide if scheduled
+        if hasattr(self, '_error_auto_hide_id'):
+            self.root.after_cancel(self._error_auto_hide_id)
+            delattr(self, '_error_auto_hide_id')
         
     def _setup_connection_panel(self, parent):
         """CAN connection settings"""
         conn_frame = ttk.LabelFrame(parent, text="CAN Connection", padding=10)
         conn_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Configure grid weights for responsive layout
+        conn_frame.columnconfigure(1, weight=1)
         
         # Interface dropdown
         ttk.Label(conn_frame, text="Interface:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -107,13 +329,13 @@ class CANAnalyzerGUI:
                                        values=["slcan", "socketcan", "usb2can", "pcan", 
                                               "ixxat", "vector", "virtual"],
                                        state="readonly", width=15)
-        interface_combo.grid(row=0, column=1, sticky=tk.W, pady=2, padx=5)
+        interface_combo.grid(row=0, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Channel/device name
         ttk.Label(conn_frame, text="Channel:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.channel_var = tk.StringVar(value="COM3")
         channel_entry = ttk.Entry(conn_frame, textvariable=self.channel_var, width=18)
-        channel_entry.grid(row=1, column=1, sticky=tk.W, pady=2, padx=5)
+        channel_entry.grid(row=1, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Bitrate
         ttk.Label(conn_frame, text="Bitrate:").grid(row=2, column=0, sticky=tk.W, pady=2)
@@ -121,7 +343,7 @@ class CANAnalyzerGUI:
         bitrate_combo = ttk.Combobox(conn_frame, textvariable=self.bitrate_var,
                                      values=["125000", "250000", "500000", "1000000"],
                                      state="readonly", width=15)
-        bitrate_combo.grid(row=2, column=1, sticky=tk.W, pady=2, padx=5)
+        bitrate_combo.grid(row=2, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Connect button
         self.connect_btn = ttk.Button(conn_frame, text="Connect", command=self._toggle_connection)
@@ -148,6 +370,9 @@ class CANAnalyzerGUI:
         decoder_frame = ttk.LabelFrame(parent, text="Signal Decoder", padding=10)
         decoder_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
+        # Configure grid weights for responsive layout
+        decoder_frame.columnconfigure(1, weight=1)
+        
         # CAN ID (hex) - dropdown with predefined IDs
         ttk.Label(decoder_frame, text="CAN ID:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self.decode_can_id_var = tk.StringVar(value="")
@@ -155,7 +380,7 @@ class CANAnalyzerGUI:
                                       values=[f"{name} ({get_can_id_hex(cid)})" for name, cid in CAN_IDS.items()] + 
                                              [get_can_id_hex(cid) for cid in CAN_IDS.values()],
                                       width=20)
-        decode_id_combo.grid(row=0, column=1, sticky=tk.W, pady=2, padx=5)
+        decode_id_combo.grid(row=0, column=1, sticky=tk.EW, pady=2, padx=5)
         decode_id_combo.bind('<<ComboboxSelected>>', self._on_can_id_selected)
         self.decode_id_combo = decode_id_combo
         
@@ -163,25 +388,25 @@ class CANAnalyzerGUI:
         ttk.Label(decoder_frame, text="Signal Name:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.signal_name_var = tk.StringVar(value="voltage")
         signal_entry = ttk.Entry(decoder_frame, textvariable=self.signal_name_var, width=12)
-        signal_entry.grid(row=1, column=1, sticky=tk.W, pady=2, padx=5)
+        signal_entry.grid(row=1, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Which byte to start reading from
         ttk.Label(decoder_frame, text="Byte Index:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self.byte_index_var = tk.StringVar(value="0")
         byte_entry = ttk.Entry(decoder_frame, textvariable=self.byte_index_var, width=12)
-        byte_entry.grid(row=2, column=1, sticky=tk.W, pady=2, padx=5)
+        byte_entry.grid(row=2, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Scale factor (multiply raw value by this)
         ttk.Label(decoder_frame, text="Scale:").grid(row=3, column=0, sticky=tk.W, pady=2)
         self.scale_var = tk.StringVar(value="0.1")
         scale_entry = ttk.Entry(decoder_frame, textvariable=self.scale_var, width=12)
-        scale_entry.grid(row=3, column=1, sticky=tk.W, pady=2, padx=5)
+        scale_entry.grid(row=3, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Offset (add this to scaled value)
         ttk.Label(decoder_frame, text="Offset:").grid(row=4, column=0, sticky=tk.W, pady=2)
         self.offset_var = tk.StringVar(value="0")
         offset_entry = ttk.Entry(decoder_frame, textvariable=self.offset_var, width=12)
-        offset_entry.grid(row=4, column=1, sticky=tk.W, pady=2, padx=5)
+        offset_entry.grid(row=4, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Unit (V, °C, A, etc.)
         ttk.Label(decoder_frame, text="Unit:").grid(row=5, column=0, sticky=tk.W, pady=2)
@@ -189,7 +414,7 @@ class CANAnalyzerGUI:
         unit_combo = ttk.Combobox(decoder_frame, textvariable=self.unit_var,
                                  values=["V", "°C", "A", "rpm", "km/h", "bar", "kg", ""],
                                  state="readonly", width=10)
-        unit_combo.grid(row=5, column=1, sticky=tk.W, pady=2, padx=5)
+        unit_combo.grid(row=5, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Data type (8-bit, 16-bit, signed/unsigned, endianness)
         ttk.Label(decoder_frame, text="Data Type:").grid(row=6, column=0, sticky=tk.W, pady=2)
@@ -198,7 +423,7 @@ class CANAnalyzerGUI:
                                        values=["uint8", "uint16_le", "uint16_be", 
                                               "int16_le", "int16_be"],
                                        state="readonly", width=12)
-        data_type_combo.grid(row=6, column=1, sticky=tk.W, pady=2, padx=5)
+        data_type_combo.grid(row=6, column=1, sticky=tk.EW, pady=2, padx=5)
         
         # Add decoder button
         add_decoder_btn = ttk.Button(decoder_frame, text="Add Signal", 
@@ -208,13 +433,16 @@ class CANAnalyzerGUI:
         # Quick preset buttons
         preset_frame = ttk.Frame(decoder_frame)
         preset_frame.grid(row=8, column=0, columnspan=2, pady=5, sticky=tk.EW)
+        preset_frame.columnconfigure(0, weight=1)
+        preset_frame.columnconfigure(1, weight=1)
+        preset_frame.columnconfigure(2, weight=1)
         
         ttk.Button(preset_frame, text="Voltage (16-bit)", 
-                  command=lambda: self._apply_preset("voltage")).pack(side=tk.LEFT, padx=2)
+                  command=lambda: self._apply_preset("voltage")).grid(row=0, column=0, sticky=tk.EW, padx=2)
         ttk.Button(preset_frame, text="Temp (16-bit)", 
-                  command=lambda: self._apply_preset("temperature")).pack(side=tk.LEFT, padx=2)
+                  command=lambda: self._apply_preset("temperature")).grid(row=0, column=1, sticky=tk.EW, padx=2)
         ttk.Button(preset_frame, text="Load Predefined", 
-                  command=self._load_predefined_decoders).pack(side=tk.LEFT, padx=2)
+                  command=self._load_predefined_decoders).grid(row=0, column=2, sticky=tk.EW, padx=2)
         
         # List of active decoders
         ttk.Label(decoder_frame, text="Active Decoders:").grid(row=9, column=0, 
@@ -263,14 +491,15 @@ class CANAnalyzerGUI:
                                                       relief=tk.FLAT, borderwidth=1)
         self.message_text.pack(fill=tk.BOTH, expand=True)
         
-        # Filter by CAN ID
+        # Filter by CAN ID - responsive layout
         filter_frame = ttk.Frame(msg_frame)
         filter_frame.pack(fill=tk.X, pady=2)
+        filter_frame.columnconfigure(1, weight=1)
         
-        ttk.Label(filter_frame, text="Filter CAN ID:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(filter_frame, text="Filter CAN ID:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.filter_id_var = tk.StringVar(value="")
-        filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_id_var, width=10)
-        filter_entry.pack(side=tk.LEFT, padx=5)
+        filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_id_var)
+        filter_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
         filter_entry.bind('<Return>', lambda e: self._update_message_filter())
         
     def _setup_plot_area(self, parent):
@@ -299,38 +528,65 @@ class CANAnalyzerGUI:
         toolbar = NavigationToolbar2Tk(self.canvas, plot_frame)
         toolbar.update()
         
-        # Controls to add/remove signals from plot
+        # Controls to add/remove signals from plot - use grid for responsive layout
         plot_select_frame = ttk.Frame(plot_frame)
         plot_select_frame.pack(fill=tk.X, pady=2)
         
-        ttk.Label(plot_select_frame, text="Plot Signal:").pack(side=tk.LEFT, padx=5)
+        # Configure grid columns for responsive layout
+        plot_select_frame.columnconfigure(1, weight=2)  # CAN ID combo
+        plot_select_frame.columnconfigure(2, weight=1)   # Signal combo
+        plot_select_frame.columnconfigure(5, weight=3)  # Plotted listbox
+        
+        # Row 0: CAN ID and Signal selection
+        ttk.Label(plot_select_frame, text="Plot Signal:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.plot_can_id_var = tk.StringVar(value="")
+        # Make combobox editable to allow manual CAN ID entry
+        # Include all predefined CAN IDs, especially defaults (0x259, 0x25E)
+        default_values = [f"{name} ({get_can_id_hex(cid)})" for name, cid in CAN_IDS.items()] + \
+                        [get_can_id_hex(cid) for cid in CAN_IDS.values()]
         plot_id_combo = ttk.Combobox(plot_select_frame, textvariable=self.plot_can_id_var,
-                                     values=[f"{name} ({get_can_id_hex(cid)})" for name, cid in CAN_IDS.items()] +
-                                            [get_can_id_hex(cid) for cid in CAN_IDS.values()],
-                                     width=20, state="readonly")
-        plot_id_combo.pack(side=tk.LEFT, padx=5)
+                                     values=default_values,
+                                     state="normal")  # Changed to "normal" to allow manual entry
+        plot_id_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=2)
         plot_id_combo.bind('<<ComboboxSelected>>', lambda e: self._update_plot_selection())
+        plot_id_combo.bind('<KeyRelease>', lambda e: self._update_plot_selection())  # Update on typing
         
         self.plot_signal_var = tk.StringVar(value="")
         plot_signal_combo = ttk.Combobox(plot_select_frame, textvariable=self.plot_signal_var,
-                                        width=15, state="readonly")
-        plot_signal_combo.pack(side=tk.LEFT, padx=5)
+                                        state="readonly")
+        plot_signal_combo.grid(row=0, column=2, sticky=tk.EW, padx=5, pady=2)
         
         ttk.Button(plot_select_frame, text="Add to Plot", 
-                  command=self._add_to_plot).pack(side=tk.LEFT, padx=5)
-        ttk.Button(plot_select_frame, text="Remove from Plot", 
-                  command=self._remove_from_plot).pack(side=tk.LEFT, padx=5)
+                  command=self._add_to_plot).grid(row=0, column=3, sticky=tk.EW, padx=5, pady=2)
+        ttk.Button(plot_select_frame, text="Remove", 
+                  command=self._remove_from_plot).grid(row=0, column=4, sticky=tk.EW, padx=5, pady=2)
         
-        # List of currently plotted signals
-        ttk.Label(plot_select_frame, text="Plotted:").pack(side=tk.LEFT, padx=(10, 5))
-        self.plotted_signals_listbox = tk.Listbox(plot_select_frame, height=1, width=30)
-        self.plotted_signals_listbox.pack(side=tk.LEFT, padx=5)
+        # Row 1: Plotted signals list
+        ttk.Label(plot_select_frame, text="Plotted:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        
+        # Frame for listbox and scrollbar
+        listbox_frame = ttk.Frame(plot_select_frame)
+        listbox_frame.grid(row=1, column=1, columnspan=3, sticky=tk.EW, padx=5, pady=2)
+        listbox_frame.columnconfigure(0, weight=1)
+        
+        self.plotted_signals_listbox = tk.Listbox(listbox_frame, height=3)
+        self.plotted_signals_listbox.grid(row=0, column=0, sticky=tk.EW)
+        
+        # Scrollbar for plotted signals listbox
+        plotted_scroll = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL,
+                                       command=self.plotted_signals_listbox.yview)
+        plotted_scroll.grid(row=0, column=1, sticky=tk.NS)
+        self.plotted_signals_listbox.config(yscrollcommand=plotted_scroll.set)
         
         ttk.Button(plot_select_frame, text="Remove Selected", 
-                  command=self._remove_selected_from_plot).pack(side=tk.LEFT, padx=5)
+                  command=self._remove_selected_from_plot).grid(row=1, column=4, sticky=tk.EW, padx=5, pady=2)
         ttk.Button(plot_select_frame, text="Clear All", 
-                  command=self._clear_all_plots).pack(side=tk.LEFT, padx=5)
+                  command=self._clear_all_plots).grid(row=1, column=5, sticky=tk.EW, padx=5, pady=2)
+        
+        # Configure column weights for buttons (no expansion)
+        plot_select_frame.columnconfigure(3, weight=0)
+        plot_select_frame.columnconfigure(4, weight=0)
+        plot_select_frame.columnconfigure(5, weight=0)
         
         self.plot_id_combo = plot_id_combo
         self.plot_signal_combo = plot_signal_combo
@@ -365,8 +621,9 @@ class CANAnalyzerGUI:
                 decoder_str = f"0x{can_id:X}: {config['name']} ({config['unit']})"
                 self.decoder_listbox.insert(tk.END, decoder_str)
                 self.decoder_listbox_items.append((can_id, config['name']))
-        
-        self._update_plot_combos()
+            
+            # Update dropdowns after loading all defaults
+            self._update_plot_combos()
     
     def _apply_preset(self, preset_type):
         """Quick preset for voltage or temperature"""
@@ -452,7 +709,9 @@ class CANAnalyzerGUI:
             else:
                 messagebox.showwarning("Warning", f"No predefined decoders for CAN ID {can_id_str}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load predefined decoders: {e}")
+            error_msg = f"Failed to load predefined decoders: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _add_signal_decoder(self):
         """Add a new signal decoder"""
@@ -513,7 +772,9 @@ class CANAnalyzerGUI:
             messagebox.showinfo("Success", f"Added decoder for CAN ID 0x{can_id:X}, signal: {signal_name}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add decoder: {e}")
+            error_msg = f"Failed to add decoder: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_signal_decoder(self):
         """Remove selected decoder from listbox and decoder"""
@@ -563,36 +824,77 @@ class CANAnalyzerGUI:
                 messagebox.showerror("Error", "Invalid selection")
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove decoder: {e}")
+            error_msg = f"Failed to remove decoder: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _update_plot_combos(self):
         """Update the CAN ID and signal dropdowns"""
-        can_ids = list(self.decoder.signal_definitions.keys())
-        self.plot_id_combo['values'] = [f"0x{id:X}" for id in can_ids]
+        # Include all predefined CAN IDs plus any with decoders
+        predefined_ids = list(CAN_IDS.values())
+        decoder_ids = list(self.decoder.signal_definitions.keys())
+        all_ids = sorted(set(predefined_ids + decoder_ids))
         
+        # Build values list with names and hex
+        values = []
+        for cid in all_ids:
+            # Add named version if available
+            if cid in CAN_ID_NAMES:
+                values.append(f"{CAN_ID_NAMES[cid]} ({get_can_id_hex(cid)})")
+            # Add hex version
+            values.append(get_can_id_hex(cid))
+        
+        # Update combobox values (keep existing selection if valid)
+        current_value = self.plot_can_id_var.get()
+        self.plot_id_combo['values'] = values
+        
+        # Restore selection if it was valid
+        if current_value and current_value in values:
+            self.plot_can_id_var.set(current_value)
+        
+        # Update signal dropdown
         if self.plot_can_id_var.get():
             try:
-                can_id = int(self.plot_can_id_var.get(), 0)
+                can_id_str = self.plot_can_id_var.get()
+                # Extract hex value if format is "NAME (0xXXX)"
+                if '(' in can_id_str and ')' in can_id_str:
+                    can_id_str = can_id_str.split('(')[1].split(')')[0]
+                can_id = int(can_id_str, 0)
                 signals = self.decoder.get_available_signals(can_id)
                 self.plot_signal_combo['values'] = signals
+                if signals and not self.plot_signal_var.get():
+                    self.plot_signal_var.set(signals[0])
             except:
                 pass
     
     def _add_to_plot(self):
         """Add a signal to the plot"""
         try:
-            can_id_str = self.plot_can_id_var.get()
-            signal_name = self.plot_signal_var.get()
+            can_id_str = self.plot_can_id_var.get().strip()
+            signal_name = self.plot_signal_var.get().strip()
             
-            if not can_id_str or not signal_name:
-                messagebox.showwarning("Warning", "Please select CAN ID and signal")
+            if not can_id_str:
+                messagebox.showwarning("Warning", "Please enter or select a CAN ID")
+                return
+            
+            if not signal_name:
+                messagebox.showwarning("Warning", "Please select a signal")
                 return
             
             # Extract hex value if format is "NAME (0xXXX)"
             if '(' in can_id_str and ')' in can_id_str:
-                can_id_str = can_id_str.split('(')[1].split(')')[0]
-            can_id = int(can_id_str, 0)
-            key = f"{can_id_str}:{signal_name}"
+                can_id_str = can_id_str.split('(')[1].split(')')[0].strip()
+            
+            # Parse CAN ID (supports hex, decimal, etc.)
+            try:
+                can_id = int(can_id_str, 0)
+            except ValueError:
+                messagebox.showerror("Error", f"Invalid CAN ID format: {can_id_str}\nUse hex (0x259) or decimal (601)")
+                return
+            
+            # Normalize CAN ID string for key
+            can_id_hex = f"0x{can_id:X}"
+            key = f"{can_id_hex}:{signal_name}"
             
             if key not in self.plot_signals:
                 self.plot_signals[key] = {
@@ -608,7 +910,9 @@ class CANAnalyzerGUI:
                 messagebox.showinfo("Info", f"{signal_name} is already plotted")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add to plot: {e}")
+            error_msg = f"Failed to add to plot: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_from_plot(self):
         """Remove signal from plot using dropdown selection"""
@@ -634,7 +938,9 @@ class CANAnalyzerGUI:
                 messagebox.showinfo("Info", f"{signal_name} is not currently plotted")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove from plot: {e}")
+            error_msg = f"Failed to remove from plot: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_selected_from_plot(self):
         """Remove selected signal from plotted signals listbox"""
@@ -668,7 +974,9 @@ class CANAnalyzerGUI:
                 messagebox.showerror("Error", "Invalid signal format")
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove signal: {e}")
+            error_msg = f"Failed to remove signal: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _clear_all_plots(self):
         """Remove all signals from plot"""
@@ -737,12 +1045,34 @@ class CANAnalyzerGUI:
                 # Extract hex value if format is "NAME (0xXXX)"
                 if '(' in can_id_str and ')' in can_id_str:
                     can_id_str = can_id_str.split('(')[1].split(')')[0]
-                can_id = int(can_id_str, 0)
+                
+                # Try to parse CAN ID (supports hex, decimal, etc.)
+                try:
+                    can_id = int(can_id_str, 0)
+                except ValueError:
+                    # Invalid CAN ID format, clear signal dropdown
+                    self.plot_signal_combo['values'] = []
+                    self.plot_signal_var.set("")
+                    return
+                
+                # Get available signals for this CAN ID
                 signals = self.decoder.get_available_signals(can_id)
+                
+                # If no signals found but this is a default CAN ID, suggest default signals
+                if not signals and can_id in DEFAULT_DECODERS:
+                    default_signals = [sig['name'] for sig in DEFAULT_DECODERS[can_id]]
+                    signals = default_signals
+                
                 self.plot_signal_combo['values'] = signals
                 if signals:
-                    self.plot_signal_var.set(signals[0])
-        except:
+                    # Auto-select first signal if none selected
+                    if not self.plot_signal_var.get() or self.plot_signal_var.get() not in signals:
+                        self.plot_signal_var.set(signals[0])
+                else:
+                    # No signals available, clear selection
+                    self.plot_signal_var.set("")
+        except Exception as e:
+            # Silently handle errors (user might be typing)
             pass
     
     def _toggle_connection(self):
@@ -766,12 +1096,17 @@ class CANAnalyzerGUI:
                 self.connect_btn.config(text="Disconnect")
                 self.status_label.config(text="Status: Connected", foreground="#28a745")
                 self.capture_btn.config(state=tk.NORMAL)
+                self._hide_error_banner()  # Clear any previous errors
                 messagebox.showinfo("Success", f"Connected to {interface} on {channel}")
             else:
-                messagebox.showerror("Error", "Failed to connect to CAN bus")
+                error_msg = "Failed to connect to CAN bus. Check interface and channel settings."
+                self._show_error_banner(error_msg)
+                messagebox.showerror("Error", error_msg)
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Connection error: {e}")
+            error_msg = f"Connection error: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _disconnect(self):
         """Disconnect from CAN bus"""
@@ -797,7 +1132,9 @@ class CANAnalyzerGUI:
     def _start_capture(self):
         """Start reading CAN messages"""
         if not self.is_connected:
-            messagebox.showerror("Error", "Not connected to CAN bus")
+            error_msg = "Not connected to CAN bus. Please connect first."
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
             return
         
         self.is_capturing = True
@@ -839,6 +1176,8 @@ class CANAnalyzerGUI:
                         })
             except Exception as e:
                 if self.is_capturing:
+                    error_msg = f"Error reading CAN message: {e}"
+                    self.root.after(0, lambda: self._show_error_banner(error_msg))
                     print(f"Error reading message: {e}")
     
     def _process_messages_thread(self):
@@ -851,6 +1190,8 @@ class CANAnalyzerGUI:
             except queue.Empty:
                 continue
             except Exception as e:
+                error_msg = f"Error processing message: {e}"
+                self.root.after(0, lambda: self._show_error_banner(error_msg))
                 print(f"Error processing message: {e}")
     
     def _process_message(self, msg):
@@ -1062,7 +1403,9 @@ class CANAnalyzerGUI:
                 
                 messagebox.showinfo("Success", f"Data exported to {filename}")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to export: {e}")
+                error_msg = f"Failed to export CSV: {e}"
+                self._show_error_banner(error_msg)
+                messagebox.showerror("Error", error_msg)
 
 
 def main():
