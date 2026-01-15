@@ -57,6 +57,11 @@ class CANAnalyzerGUI:
         self.decoded_data = defaultdict(lambda: defaultdict(deque))
         self.max_data_points = 1000
         
+        # Error banner state
+        self.error_banner_frame = None
+        self.error_label = None
+        self.current_error = None
+        
         # What signals to plot
         self.plot_signals = {}
         # Use a nicer color palette
@@ -79,6 +84,9 @@ class CANAnalyzerGUI:
         
     def _setup_ui(self):
         """Build the GUI"""
+        # Error banner at the top (always visible when there's an error)
+        self._setup_error_banner()
+        
         # Split window into left (controls) and right (plots/messages)
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -94,6 +102,52 @@ class CANAnalyzerGUI:
         self._setup_plot_controls(left_frame)
         self._setup_message_display(right_frame)
         self._setup_plot_area(right_frame)
+    
+    def _setup_error_banner(self):
+        """Create error banner at the top of the window"""
+        self.error_banner_frame = tk.Frame(self.root, bg="#dc3545", height=0)
+        self.error_banner_frame.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
+        self.error_banner_frame.pack_propagate(False)
+        
+        # Error content frame
+        error_content = tk.Frame(self.error_banner_frame, bg="#dc3545")
+        error_content.pack(fill=tk.X, padx=10, pady=8)
+        
+        # Error icon and message
+        error_icon = tk.Label(error_content, text="⚠", bg="#dc3545", 
+                             fg="white", font=('Segoe UI', 14, 'bold'))
+        error_icon.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.error_label = tk.Label(error_content, text="", bg="#dc3545", 
+                                    fg="white", font=('Segoe UI', 10),
+                                    wraplength=1200, justify=tk.LEFT)
+        self.error_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Close button
+        close_btn = tk.Button(error_content, text="✕", bg="#dc3545", fg="white",
+                             font=('Segoe UI', 12, 'bold'), relief=tk.FLAT,
+                             command=self._hide_error_banner, cursor="hand2",
+                             activebackground="#c82333", activeforeground="white",
+                             bd=0, padx=5, pady=2)
+        close_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # Initially hidden
+        self._hide_error_banner()
+    
+    def _show_error_banner(self, error_message):
+        """Show error banner with message"""
+        self.current_error = error_message
+        if self.error_label:
+            self.error_label.config(text=error_message)
+            self.error_banner_frame.config(height=50)
+            self.error_banner_frame.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
+    
+    def _hide_error_banner(self):
+        """Hide error banner"""
+        self.current_error = None
+        if self.error_banner_frame:
+            self.error_banner_frame.config(height=0)
+            self.error_banner_frame.pack_forget()
         
     def _setup_connection_panel(self, parent):
         """CAN connection settings"""
@@ -452,7 +506,9 @@ class CANAnalyzerGUI:
             else:
                 messagebox.showwarning("Warning", f"No predefined decoders for CAN ID {can_id_str}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load predefined decoders: {e}")
+            error_msg = f"Failed to load predefined decoders: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _add_signal_decoder(self):
         """Add a new signal decoder"""
@@ -513,7 +569,9 @@ class CANAnalyzerGUI:
             messagebox.showinfo("Success", f"Added decoder for CAN ID 0x{can_id:X}, signal: {signal_name}")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add decoder: {e}")
+            error_msg = f"Failed to add decoder: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_signal_decoder(self):
         """Remove selected decoder from listbox and decoder"""
@@ -563,7 +621,9 @@ class CANAnalyzerGUI:
                 messagebox.showerror("Error", "Invalid selection")
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove decoder: {e}")
+            error_msg = f"Failed to remove decoder: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _update_plot_combos(self):
         """Update the CAN ID and signal dropdowns"""
@@ -608,7 +668,9 @@ class CANAnalyzerGUI:
                 messagebox.showinfo("Info", f"{signal_name} is already plotted")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to add to plot: {e}")
+            error_msg = f"Failed to add to plot: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_from_plot(self):
         """Remove signal from plot using dropdown selection"""
@@ -634,7 +696,9 @@ class CANAnalyzerGUI:
                 messagebox.showinfo("Info", f"{signal_name} is not currently plotted")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove from plot: {e}")
+            error_msg = f"Failed to remove from plot: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _remove_selected_from_plot(self):
         """Remove selected signal from plotted signals listbox"""
@@ -668,7 +732,9 @@ class CANAnalyzerGUI:
                 messagebox.showerror("Error", "Invalid signal format")
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to remove signal: {e}")
+            error_msg = f"Failed to remove signal: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _clear_all_plots(self):
         """Remove all signals from plot"""
@@ -766,12 +832,17 @@ class CANAnalyzerGUI:
                 self.connect_btn.config(text="Disconnect")
                 self.status_label.config(text="Status: Connected", foreground="#28a745")
                 self.capture_btn.config(state=tk.NORMAL)
+                self._hide_error_banner()  # Clear any previous errors
                 messagebox.showinfo("Success", f"Connected to {interface} on {channel}")
             else:
-                messagebox.showerror("Error", "Failed to connect to CAN bus")
+                error_msg = "Failed to connect to CAN bus. Check interface and channel settings."
+                self._show_error_banner(error_msg)
+                messagebox.showerror("Error", error_msg)
                 
         except Exception as e:
-            messagebox.showerror("Error", f"Connection error: {e}")
+            error_msg = f"Connection error: {e}"
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
     
     def _disconnect(self):
         """Disconnect from CAN bus"""
@@ -797,7 +868,9 @@ class CANAnalyzerGUI:
     def _start_capture(self):
         """Start reading CAN messages"""
         if not self.is_connected:
-            messagebox.showerror("Error", "Not connected to CAN bus")
+            error_msg = "Not connected to CAN bus. Please connect first."
+            self._show_error_banner(error_msg)
+            messagebox.showerror("Error", error_msg)
             return
         
         self.is_capturing = True
@@ -839,6 +912,8 @@ class CANAnalyzerGUI:
                         })
             except Exception as e:
                 if self.is_capturing:
+                    error_msg = f"Error reading CAN message: {e}"
+                    self._show_error_banner(error_msg)
                     print(f"Error reading message: {e}")
     
     def _process_messages_thread(self):
@@ -851,6 +926,8 @@ class CANAnalyzerGUI:
             except queue.Empty:
                 continue
             except Exception as e:
+                error_msg = f"Error processing message: {e}"
+                self._show_error_banner(error_msg)
                 print(f"Error processing message: {e}")
     
     def _process_message(self, msg):
@@ -1062,7 +1139,9 @@ class CANAnalyzerGUI:
                 
                 messagebox.showinfo("Success", f"Data exported to {filename}")
             except Exception as e:
-                messagebox.showerror("Error", f"Failed to export: {e}")
+                error_msg = f"Failed to export CSV: {e}"
+                self._show_error_banner(error_msg)
+                messagebox.showerror("Error", error_msg)
 
 
 def main():
