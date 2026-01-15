@@ -37,9 +37,13 @@ CAN_ID_NAMES = {
 # Raw values are uint16 little-endian (b0 + b1<<8)
 # CAN ID 0x259: analog voltage in1 at bytes 0-1 (raw: 0xD703 = 55043)
 # CAN ID 0x25E: internal voltage at bytes 2-3 (raw: 0xEC05 = 60421), temperature at bytes 4-5 (raw: 0xB906 = 47366)
+# Includes both raw values and default scaled values (V, °C) for easy access
 EXAMPLE_DECODERS = {
     CAN_ID_AIN1_4: [
-        {'name': 'analog_voltage_in1', 'byte_index': 0, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
+        # Default: Analog voltage with proper scaling (V)
+        {'name': 'analog_voltage_in1', 'byte_index': 0, 'data_type': 'uint16_le', 'scale': 0.001, 'offset': 0, 'unit': 'V'},
+        # Raw value option
+        {'name': 'analog_voltage_in1_raw', 'byte_index': 0, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
     ],
     CAN_ID_AIN5_8: [
         {'name': 'AIN5', 'byte_index': 0, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
@@ -66,8 +70,13 @@ EXAMPLE_DECODERS = {
         {'name': 'AIN20', 'byte_index': 6, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
     ],
     CAN_ID_AIN21_temp: [
-        {'name': 'internal_voltage', 'byte_index': 2, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
-        {'name': 'temperature', 'byte_index': 4, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
+        # Default: Internal voltage with proper scaling (V)
+        {'name': 'internal_voltage', 'byte_index': 2, 'data_type': 'uint16_le', 'scale': 0.001, 'offset': 0, 'unit': 'V'},
+        # Default: Temperature with proper scaling (°C)
+        {'name': 'temperature', 'byte_index': 4, 'data_type': 'uint16_le', 'scale': 0.001, 'offset': 0, 'unit': '°C'},
+        # Raw value options
+        {'name': 'internal_voltage_raw', 'byte_index': 2, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
+        {'name': 'temperature_raw', 'byte_index': 4, 'data_type': 'uint16_le', 'scale': 1.0, 'offset': 0, 'unit': 'raw'},
     ],
 }
 

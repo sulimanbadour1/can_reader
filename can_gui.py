@@ -436,13 +436,16 @@ class CANAnalyzerGUI:
         preset_frame.columnconfigure(0, weight=1)
         preset_frame.columnconfigure(1, weight=1)
         preset_frame.columnconfigure(2, weight=1)
+        preset_frame.columnconfigure(3, weight=1)
         
-        ttk.Button(preset_frame, text="Voltage (16-bit)", 
-                  command=lambda: self._apply_preset("voltage")).grid(row=0, column=0, sticky=tk.EW, padx=2)
-        ttk.Button(preset_frame, text="Temp (16-bit)", 
-                  command=lambda: self._apply_preset("temperature")).grid(row=0, column=1, sticky=tk.EW, padx=2)
+        ttk.Button(preset_frame, text="Voltage Ch1", 
+                  command=lambda: self._apply_preset("analog_voltage_in1")).grid(row=0, column=0, sticky=tk.EW, padx=2)
+        ttk.Button(preset_frame, text="Internal Voltage", 
+                  command=lambda: self._apply_preset("internal_voltage")).grid(row=0, column=1, sticky=tk.EW, padx=2)
+        ttk.Button(preset_frame, text="Temperature", 
+                  command=lambda: self._apply_preset("temperature")).grid(row=0, column=2, sticky=tk.EW, padx=2)
         ttk.Button(preset_frame, text="Load Predefined", 
-                  command=self._load_predefined_decoders).grid(row=0, column=2, sticky=tk.EW, padx=2)
+                  command=self._load_predefined_decoders).grid(row=0, column=3, sticky=tk.EW, padx=2)
         
         # List of active decoders
         ttk.Label(decoder_frame, text="Active Decoders:").grid(row=9, column=0, 
@@ -626,21 +629,34 @@ class CANAnalyzerGUI:
             self._update_plot_combos()
     
     def _apply_preset(self, preset_type):
-        """Quick preset for voltage or temperature"""
-        if preset_type == "voltage":
-            self.signal_name_var.set("voltage")
+        """Quick preset for default signals: analog_voltage_in1, internal_voltage, or temperature"""
+        if preset_type == "analog_voltage_in1":
+            # Analog voltage in1: CAN ID 0x259, byte 0, scale 0.001, unit V
+            self.decode_can_id_var.set("0x259")
+            self.signal_name_var.set("analog_voltage_in1")
             self.byte_index_var.set("0")
-            self.scale_var.set("0.1")
+            self.scale_var.set("0.001")
+            self.offset_var.set("0")
+            self.unit_var.set("V")
+            self.data_type_var.set("uint16_le")
+        elif preset_type == "internal_voltage":
+            # Internal voltage: CAN ID 0x25E, byte 2, scale 0.001, unit V
+            self.decode_can_id_var.set("0x25E")
+            self.signal_name_var.set("internal_voltage")
+            self.byte_index_var.set("2")
+            self.scale_var.set("0.001")
             self.offset_var.set("0")
             self.unit_var.set("V")
             self.data_type_var.set("uint16_le")
         elif preset_type == "temperature":
+            # Temperature: CAN ID 0x25E, byte 4, scale 0.001, unit °C
+            self.decode_can_id_var.set("0x25E")
             self.signal_name_var.set("temperature")
-            self.byte_index_var.set("2")
-            self.scale_var.set("0.1")
-            self.offset_var.set("-40")
+            self.byte_index_var.set("4")
+            self.scale_var.set("0.001")
+            self.offset_var.set("0")
             self.unit_var.set("°C")
-            self.data_type_var.set("int16_le")
+            self.data_type_var.set("uint16_le")
     
     def _on_can_id_selected(self, event=None):
         """When CAN ID is selected from dropdown, extract the ID"""
@@ -699,9 +715,10 @@ class CANAnalyzerGUI:
                     )
                     self.decoder.add_signal_definition(can_id, signal)
                     
-                    # Add to listbox
+                    # Add to listbox and track it
                     decoder_str = f"0x{can_id:X}: {decoder_config['name']} ({decoder_config['unit']})"
                     self.decoder_listbox.insert(tk.END, decoder_str)
+                    self.decoder_listbox_items.append((can_id, decoder_config['name']))
                     count += 1
                 
                 self._update_plot_combos()
@@ -1018,7 +1035,7 @@ class CANAnalyzerGUI:
         self.plotted_signals_listbox.config(height=min(max(1, num_items), 4))
     
     def _update_plot_legend(self):
-        """Update plot legend"""
+        """Update plot legend - refresh plot with current signals"""
         self.ax.clear()
         self.ax.set_facecolor('#fafafa')
         self.ax.set_xlabel("Time (s)", fontsize=11, fontweight='bold')
@@ -1030,10 +1047,65 @@ class CANAnalyzerGUI:
         self.ax.spines['left'].set_color('#cccccc')
         self.ax.spines['bottom'].set_color('#cccccc')
         
+        # Create professional legend entries even when no data yet
         if self.plot_signals:
-            labels = [f"{v['signal']} (0x{v['can_id']:X})" 
-                     for v in self.plot_signals.values()]
-            self.ax.legend(labels, loc='best')
+            legend_handles = []
+            legend_labels = []
+            
+            from can_ids import get_can_id_hex
+            
+            for plot_info in self.plot_signals.values():
+                can_id = plot_info['can_id']
+                signal_name = plot_info['signal']
+                color = plot_info['color']
+                can_id_hex = get_can_id_hex(can_id)
+                
+                # Get unit from decoder
+                unit = ""
+                for sig_def_list in self.decoder.signal_definitions.get(can_id, []):
+                    if sig_def_list.name == signal_name:
+                        unit = sig_def_list.unit
+                        break
+                
+                # Create clear label distinguishing different signals from same CAN ID
+                if unit:
+                    # Use clearer formatting to distinguish signals from same CAN ID
+                    if signal_name == 'temperature':
+                        label = f"Temperature | {can_id_hex} | {unit}"
+                    elif signal_name == 'internal_voltage':
+                        label = f"Internal Voltage | {can_id_hex} | {unit}"
+                    elif signal_name == 'analog_voltage_in1':
+                        label = f"Analog Voltage In1 | {can_id_hex} | {unit}"
+                    else:
+                        label = f"{signal_name.replace('_', ' ').title()} | {can_id_hex} | {unit}"
+                else:
+                    label = f"{signal_name.replace('_', ' ').title()} | {can_id_hex}"
+                
+                # Create empty line for legend (no data yet)
+                line, = self.ax.plot([], [], color=color, label=label,
+                                   linewidth=2.5, alpha=0.85, marker='o',
+                                   markersize=4, antialiased=True)
+                
+                legend_handles.append(line)
+                legend_labels.append(label)
+            
+            # Create professional legend
+            legend = self.ax.legend(handles=legend_handles, labels=legend_labels,
+                                  loc='upper left', fontsize=9.5,
+                                  framealpha=0.95, fancybox=True, shadow=True,
+                                  frameon=True, edgecolor='#333333',
+                                  facecolor='white', borderpad=0.8,
+                                  labelspacing=0.7, columnspacing=1.2,
+                                  handlelength=2.5, handletextpad=0.8)
+            
+            # Style legend text
+            for text in legend.get_texts():
+                text.set_fontweight('normal')
+                text.set_fontfamily('monospace')
+            
+            # Add subtle border
+            legend.get_frame().set_linewidth(1.2)
+            legend.get_frame().set_linestyle('-')
         
         self.canvas.draw()
     
@@ -1269,10 +1341,24 @@ class CANAnalyzerGUI:
             return
         
         self.ax.clear()
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Value")
-        self.ax.set_title("CAN Signal Values")
-        self.ax.grid(True, alpha=0.3)
+        
+        # Professional plot styling
+        self.ax.set_facecolor('#fafafa')
+        self.ax.set_xlabel("Time (s)", fontsize=11, fontweight='bold', color='#333333')
+        self.ax.set_ylabel("Value", fontsize=11, fontweight='bold', color='#333333')
+        self.ax.set_title("CAN Signal Values - Real-Time Monitoring", 
+                         fontsize=13, fontweight='bold', pad=15, color='#1a1a1a')
+        
+        # Professional grid styling
+        self.ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5, color='#cccccc')
+        
+        # Professional spine styling
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['left'].set_color('#cccccc')
+        self.ax.spines['bottom'].set_color('#cccccc')
+        self.ax.spines['left'].set_linewidth(1.2)
+        self.ax.spines['bottom'].set_linewidth(1.2)
         
         if not self.decoded_data:
             self.canvas.draw()
@@ -1292,7 +1378,10 @@ class CANAnalyzerGUI:
             self.canvas.draw()
             return
         
-        # Plot each signal
+        # Plot each signal with professional styling
+        legend_handles = []
+        legend_labels = []
+        
         for key, plot_info in self.plot_signals.items():
             can_id = plot_info['can_id']
             signal_name = plot_info['signal']
@@ -1307,8 +1396,9 @@ class CANAnalyzerGUI:
                     values = [dp['value'] for dp in data_points]
                     
                     # Get CAN ID name and unit if available
-                    from can_ids import get_can_id_name
+                    from can_ids import get_can_id_name, get_can_id_hex
                     can_id_name = get_can_id_name(can_id)
+                    can_id_hex = get_can_id_hex(can_id)
                     
                     # Get unit from decoder
                     unit = ""
@@ -1317,18 +1407,63 @@ class CANAnalyzerGUI:
                             unit = sig_def_list.unit
                             break
                     
+                    # Create professional label format: "Signal Name | CAN ID (0xXXX) | Unit"
+                    # Make it clear that temperature and internal_voltage are separate signals
                     if unit:
-                        label = f"{signal_name} ({can_id_name}) [{unit}]"
+                        # Use clearer formatting to distinguish signals from same CAN ID
+                        if signal_name == 'temperature':
+                            label = f"Temperature | {can_id_hex} | {unit}"
+                        elif signal_name == 'internal_voltage':
+                            label = f"Internal Voltage | {can_id_hex} | {unit}"
+                        elif signal_name == 'analog_voltage_in1':
+                            label = f"Analog Voltage In1 | {can_id_hex} | {unit}"
+                        else:
+                            label = f"{signal_name.replace('_', ' ').title()} | {can_id_hex} | {unit}"
                     else:
-                        label = f"{signal_name} ({can_id_name})"
+                        label = f"{signal_name.replace('_', ' ').title()} | {can_id_hex}"
                     
-                    # Use nicer line styling
-                    self.ax.plot(times, values, color=color, label=label, 
-                               linewidth=2.5, alpha=0.8, marker='o', markersize=3, markevery=10)
+                    # Get current value for legend (most recent)
+                    current_value = values[-1] if values else None
+                    
+                    # Format current value with appropriate precision
+                    if current_value is not None:
+                        if unit == '°C':
+                            value_str = f"{current_value:.2f}°C"
+                        elif unit == 'V':
+                            value_str = f"{current_value:.3f}V"
+                        else:
+                            value_str = f"{current_value:.2f}{unit}" if unit else f"{current_value:.2f}"
+                        
+                        # Add current value to label with unit
+                        label = f"{label} | Now: {value_str}"
+                    
+                    # Use professional line styling
+                    line, = self.ax.plot(times, values, color=color, label=label, 
+                                        linewidth=2.5, alpha=0.85, marker='o', 
+                                        markersize=4, markevery=max(1, len(values)//20),
+                                        antialiased=True)
+                    
+                    legend_handles.append(line)
+                    legend_labels.append(label)
         
-        if self.plot_signals:
-            self.ax.legend(loc='best', fontsize=10, framealpha=0.9, 
-                         fancybox=True, shadow=True, frameon=True)
+        # Create professional legend
+        if legend_handles:
+            legend = self.ax.legend(handles=legend_handles, labels=legend_labels,
+                                  loc='upper left', fontsize=9.5,
+                                  framealpha=0.95, fancybox=True, shadow=True,
+                                  frameon=True, edgecolor='#333333', 
+                                  facecolor='white', borderpad=0.8,
+                                  labelspacing=0.7, columnspacing=1.2,
+                                  handlelength=2.5, handletextpad=0.8)
+            
+            # Style legend text
+            for text in legend.get_texts():
+                text.set_fontweight('normal')
+                text.set_fontfamily('monospace')
+            
+            # Add subtle border
+            legend.get_frame().set_linewidth(1.2)
+            legend.get_frame().set_linestyle('-')
             # Set y-axis label based on what's being plotted
             units = set()
             for plot_info in self.plot_signals.values():
