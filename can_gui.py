@@ -127,7 +127,8 @@ class CANAnalyzerGUI:
         # Mouse wheel scrolling for left panel
         def _on_mousewheel(event):
             self.left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.left_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.left_canvas.bind("<MouseWheel>", _on_mousewheel)
+        left_frame.bind("<MouseWheel>", _on_mousewheel)
         
         # Create vertical paned window for right side (messages and plots)
         right_paned = ttk.PanedWindow(main_paned, orient=tk.VERTICAL)
@@ -143,7 +144,6 @@ class CANAnalyzerGUI:
         
         self._setup_connection_panel(left_frame)
         self._setup_decoder_panel(left_frame)
-        self._setup_plot_controls(left_frame)
         self._setup_message_display(msg_container)
         self._setup_plot_area(plot_container)
     
@@ -465,20 +465,6 @@ class CANAnalyzerGUI:
                                        command=self._remove_signal_decoder)
         remove_decoder_btn.grid(row=11, column=0, columnspan=2, pady=5, sticky=tk.EW)
         
-    def _setup_plot_controls(self, parent):
-        """Controls for capturing and exporting"""
-        plot_ctrl_frame = ttk.LabelFrame(parent, text="Plot Controls", padding=10)
-        plot_ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
-        
-        self.capture_btn = ttk.Button(plot_ctrl_frame, text="Start Capture", 
-                                     command=self._toggle_capture, state=tk.DISABLED)
-        self.capture_btn.pack(fill=tk.X, pady=2)
-        
-        ttk.Button(plot_ctrl_frame, text="Clear Data", 
-                  command=self._clear_data).pack(fill=tk.X, pady=2)
-        
-        ttk.Button(plot_ctrl_frame, text="Export CSV", 
-                  command=self._export_csv).pack(fill=tk.X, pady=2)
         
     def _setup_message_display(self, parent):
         """Text area showing raw CAN messages"""
@@ -506,8 +492,60 @@ class CANAnalyzerGUI:
         filter_entry.bind('<Return>', lambda e: self._update_message_filter())
         
     def _setup_plot_area(self, parent):
-        """Matplotlib plot area for real-time graphs"""
-        plot_frame = ttk.LabelFrame(parent, text="Real-Time Plots", padding=5)
+        """Matplotlib plot area for real-time graphs - scrollable and responsive"""
+        # Create outer frame
+        plot_outer_frame = ttk.Frame(parent)
+        plot_outer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create scrollable canvas for plot section
+        plot_canvas = tk.Canvas(plot_outer_frame, bg='#f0f0f0', highlightthickness=0)
+        plot_scrollbar = ttk.Scrollbar(plot_outer_frame, orient="vertical", command=plot_canvas.yview)
+        plot_scrollable_frame = ttk.Frame(plot_canvas)
+        
+        # Configure scroll region
+        def update_plot_scroll_region(event=None):
+            plot_canvas.configure(scrollregion=plot_canvas.bbox("all"))
+        plot_scrollable_frame.bind("<Configure>", update_plot_scroll_region)
+        
+        # Create window in canvas
+        canvas_window = plot_canvas.create_window((0, 0), window=plot_scrollable_frame, anchor="nw")
+        
+        # Configure canvas width on resize
+        def configure_plot_canvas_width(event):
+            canvas_width = event.width
+            plot_canvas.itemconfig(canvas_window, width=canvas_width)
+        plot_canvas.bind('<Configure>', configure_plot_canvas_width)
+        
+        # Pack canvas and scrollbar
+        plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        plot_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        plot_canvas.configure(yscrollcommand=plot_scrollbar.set)
+        
+        # Enable mousewheel scrolling for plot canvas
+        def _on_plot_mousewheel(event):
+            plot_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        plot_canvas.bind("<MouseWheel>", _on_plot_mousewheel)
+        plot_scrollable_frame.bind("<MouseWheel>", _on_plot_mousewheel)
+        
+        # Plot Controls section (Start Capture, Clear Data, Export CSV)
+        plot_ctrl_frame = ttk.LabelFrame(plot_scrollable_frame, text="Plot Controls", padding=10)
+        plot_ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
+        plot_ctrl_frame.columnconfigure(0, weight=1)
+        plot_ctrl_frame.columnconfigure(1, weight=1)
+        plot_ctrl_frame.columnconfigure(2, weight=1)
+        
+        self.capture_btn = ttk.Button(plot_ctrl_frame, text="Start Capture", 
+                                     command=self._toggle_capture, state=tk.DISABLED)
+        self.capture_btn.grid(row=0, column=0, sticky=tk.EW, padx=2, pady=2)
+        
+        ttk.Button(plot_ctrl_frame, text="Clear Data", 
+                  command=self._clear_data).grid(row=0, column=1, sticky=tk.EW, padx=2, pady=2)
+        
+        ttk.Button(plot_ctrl_frame, text="Export CSV", 
+                  command=self._export_csv).grid(row=0, column=2, sticky=tk.EW, padx=2, pady=2)
+        
+        # Plot area frame
+        plot_frame = ttk.LabelFrame(plot_scrollable_frame, text="Real-Time Plots", padding=5)
         plot_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Create plot with better styling
@@ -532,8 +570,8 @@ class CANAnalyzerGUI:
         toolbar.update()
         
         # Controls to add/remove signals from plot - use grid for responsive layout
-        plot_select_frame = ttk.Frame(plot_frame)
-        plot_select_frame.pack(fill=tk.X, pady=2)
+        plot_select_frame = ttk.Frame(plot_scrollable_frame)
+        plot_select_frame.pack(fill=tk.X, padx=5, pady=5)
         
         # Configure grid columns for responsive layout
         plot_select_frame.columnconfigure(1, weight=2)  # CAN ID combo
