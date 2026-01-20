@@ -4,6 +4,13 @@ DIY CAN Bus Reader and Analyzer
 
 A free, powerful Python tool for CAN bus analysis with custom plots, filtering, and exporting capabilities. Built with `python-can` and `matplotlib` for publication-quality visualizations.
 
+
+## GUI Screenshot
+
+![CAN Analyzer GUI](can_reader.png)
+
+*Figure 1: The CAN Analyzer GUI showing real-time signal monitoring, message logging, and decoder configuration panels.*
+
 ## Features
 
 - **GUI Application**: Tkinter-based GUI for easy CAN bus analysis
