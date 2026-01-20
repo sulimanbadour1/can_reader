@@ -30,7 +30,7 @@ wheels/
 *.csv
 *.json
 *.log
-*.png
+
 *.pdf
 *.svg
 
